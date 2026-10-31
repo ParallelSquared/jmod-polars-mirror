@@ -1,17 +1,24 @@
 name: Release
 
-# Repack conda-forge's free-threaded polars-runtime-32 for one polars version,
-# test each wheel on its platform, and publish them as the release v<version>.
+# Repack conda-forge's free-threaded polars-runtime-32 for the version in
+# POLARS_VERSION and test each wheel on its platform.  On main, publish them
+# as the release v<version> if it does not exist yet.  Pull requests build and
+# test only.
 on:
+  push:
+    branches: [main]
+    paths:
+      - POLARS_VERSION
+      - repack.py
+      - smoke_test.py
+      - .github/workflows/release.yml
+  pull_request:
+    paths:
+      - POLARS_VERSION
+      - repack.py
+      - smoke_test.py
+      - .github/workflows/release.yml
   workflow_dispatch:
-    inputs:
-      version:
-        description: "polars version, e.g. 1.44.2"
-        required: true
-      publish:
-        description: "Publish the release (off: build and test only)"
-        type: boolean
-        default: true
 
 permissions:
   contents: read
@@ -23,10 +30,14 @@ defaults:
 jobs:
   repack:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+      - id: version
+        run: echo "version=$(tr -d '[:space:]' < POLARS_VERSION)" >> "$GITHUB_OUTPUT"
       - uses: astral-sh/setup-uv@v6
-      - run: uv run --no-project --python 3.14 python -I repack.py "${{ inputs.version }}"
+      - run: uv run --no-project --python 3.14 python -I repack.py "${{ steps.version.outputs.version }}"
       - uses: actions/upload-artifact@v4
         with:
           name: wheels
@@ -49,6 +60,8 @@ jobs:
           - runner: windows-latest
             tag: win_amd64
     runs-on: ${{ matrix.runner }}
+    env:
+      VERSION: ${{ needs.repack.outputs.version }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -64,27 +77,33 @@ jobs:
       - name: Install into free-threaded Python
         run: |
           uv venv --python 3.14t
-          uv pip install --python .venv dist/*-${{ matrix.tag }}*.whl "polars==${{ inputs.version }}"
-      - run: uv run --no-project --python .venv python -I smoke_test.py "${{ inputs.version }}"
+          uv pip install --python .venv dist/*-${{ matrix.tag }}*.whl "polars==$VERSION"
+      - run: uv run --no-project --python .venv python -I smoke_test.py "$VERSION"
 
   release:
-    needs: test
-    if: ${{ inputs.publish }}
+    needs: [repack, test]
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      VERSION: ${{ needs.repack.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/download-artifact@v4
         with:
           name: wheels
           path: dist
-      - name: Publish v${{ inputs.version }}
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Publish v${{ needs.repack.outputs.version }}
         run: |
+          if gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::notice::v$VERSION is already released; a release is never replaced"
+            exit 0
+          fi
           cd dist
           sha256sum *.whl > SHA256SUMS
-          gh release create "v${{ inputs.version }}" *.whl SHA256SUMS \
+          gh release create "v$VERSION" *.whl SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" \
-            --title "polars-runtime-32 ${{ inputs.version }} (free-threaded)" \
-            --notes "conda-forge's cp314t builds of polars-runtime-32 ${{ inputs.version }}, repacked as wheels. Install alongside polars==${{ inputs.version }} from PyPI."
+            --target "$GITHUB_SHA" \
+            --title "polars-runtime-32 $VERSION (free-threaded)" \
+            --notes "conda-forge's cp314t builds of polars-runtime-32 $VERSION, repacked as wheels. Install alongside polars==$VERSION from PyPI."

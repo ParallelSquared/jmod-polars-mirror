@@ -31,18 +31,20 @@ stops if a build declares a newer glibc or macOS than its tag claims.
 
 1. Check that conda-forge has `cp314t` builds of the version for every subdir
    above. `repack.py` stops and names any that are missing.
-2. In this repo's Actions tab, run **Release** with the version, e.g. `1.44.2`.
-   It repacks the wheels, then tests each one on its own platform:
+2. Put the version in `POLARS_VERSION` and push to `main`. The **Release**
+   workflow repacks the wheels, then tests each one on its own platform:
    `smoke_test.py` in free-threaded Python, plus `auditwheel show` on Linux.
-   If every test passes, it publishes the wheels and a `SHA256SUMS` file as the
-   release `v<version>`. Untick **publish** to build and test without releasing.
+   If every test passes and `v<version>` is not released yet, it publishes
+   the wheels and a `SHA256SUMS` file as release `v<version>`, tagging the
+   pushed commit. An existing release is never replaced. Pull requests build
+   and test without releasing.
 3. In JMod's `pyproject.toml`, bump `polars` and `polars-runtime-32` together to
    the new version, update the wheel URLs under `[tool.uv.sources]`, and run
    `uv lock`. `polars` requires `polars-runtime-32` at its own exact version.
 
 To build locally (Python 3.14+, standard library only):
 
-    python repack.py 1.44.2          # wheels into dist/
+    python repack.py $(cat POLARS_VERSION)          # wheels into dist/
 
 ## License
 
